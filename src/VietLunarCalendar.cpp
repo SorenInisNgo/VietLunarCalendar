@@ -1,14 +1,17 @@
 #include "VietLunarCalendar.h"
-#include <math.h> // FIX: Changed from <cmath> to <math.h> for better compatibility with the Arduino compiler (avr-gcc).
+#include <math.h>
 
 /**
  * VietLunarCalendar - Vietnamese Lunar Calendar Library for Arduino
- * Ported from: https://www.xemamlich.uhm.vn/JavaScript/amlich-hnd.js
+ * * CORE LOGIC AND DATA SOURCE:
+ * Ported from the JavaScript files created by Ho Ngoc Duc.
+ * Original Source URL: https://www.xemamlich.uhm.vn/JavaScript/amlich-hnd.js
  * Original Author: Hồ Ngọc Đức (Ho Ngoc Duc)
  * Copyright 2004 Ho Ngoc Duc.
  */
 
 // Encoded Lunar Year Data (TKxx - Data for 1900-2199)
+// These arrays contain the encoded information for lunar months and leap months.
 const uint32_t VietLunarCalendar::TK20[] = { /* 1900-1999 */
   0x3c4bd8, 0x624ae0, 0x4ca570, 0x3854d5, 0x5cd260, 0x44d950, 0x315554, 0x5656a0, 0x409ad0, 0x2a55d2,
   0x504ae0, 0x3aa5b6, 0x60a4d0, 0x48d250, 0x33d255, 0x58b540, 0x42d6a0, 0x2cada2, 0x5295b0, 0x3f4977,
@@ -69,6 +72,7 @@ long VietLunarCalendar::jdn(int dd, int mm, int yy) {
   int a = floor((14 - mm) / 12);
   long y = yy + 4800 - a;
   int m = mm + 12 * a - 3;
+  // Specific JDN formula from the original JS source
   long jd = dd + floor((153 * m + 2) / 5) + 365 * y + floor(y / 4) - floor(y / 100) + floor(y / 400) - 32045;
   return jd;
 }
@@ -84,6 +88,7 @@ double VietLunarCalendar::sunLongitude(long jdn) {
   double M = 357.52910 + 35999.05030 * T - 0.0001559 * T2 - 0.00000048 * T2 * T; // Mean Anomaly (degree)
   double L0 = 280.46645 + 36000.76983 * T + 0.0003032 * T2; // Mean Longitude (degree)
   
+  // Equation of Center (Delta L)
   double DL = (1.914600 - 0.004817 * T - 0.000014 * T2) * sin(dr * M);
   DL += (0.019993 - 0.000101 * T) * sin(dr * 2 * M);
   DL += 0.000290 * sin(dr * 3 * M);
@@ -106,25 +111,144 @@ int VietLunarCalendar::getSunLongitudeIndex(long dayNumber, double timeZone) {
   return floor(longitude / PI * 12);
 }
 
+// --- CORE LUNAR CALCULATION FUNCTIONS (Ported from amlich-hnd.js) ---
+
+/**
+ * Retrieves the encoded data (TKxx) for a given Gregorian year (1900-2199).
+ */
+uint32_t VietLunarCalendar::getYearCode(int yyyy) {
+  if (yyyy >= 1900 && yyyy <= 1999) {
+    return TK20[yyyy - 1900];
+  } else if (yyyy >= 2000 && yyyy <= 2099) {
+    return TK21[yyyy - 2000];
+  } else if (yyyy >= 2100 && yyyy <= 2199) {
+    return TK22[yyyy - 2100];
+  }
+  return 0; // Out of supported range
+}
+
+/**
+ * Decodes the Lunar Year Code (k) to determine month lengths and leap month,
+ * and calculates the Julian Day Number (JDN) for the 1st day of Lunar Month 1.
+ */
+void VietLunarCalendar::decodeLunarYear(int yy, uint32_t k, LunarDate ly[]) {
+  // JDN for Winter Solstice of the previous year (approximate start point)
+  long jd = jdn(31, 12, yy - 1); 
+  
+  // Adjusted JDN for the 1st day of Lunar Month 1 (based on bit 28-31 offset)
+  jd += 2 + ((k >> 28) & 0xF); 
+  
+  // Extract month information
+  int leap_month = (k >> 12) & 0xF;
+  int month_lengths = k & 0xFFF;
+  int num_months = 12;
+  if (leap_month > 0) num_months = 13;
+
+  int lunar_month = 1;
+  int array_index = 0;
+  
+  for (int i = 0; i < num_months; i++) {
+    ly[array_index].jd = jd;
+    ly[array_index].year = yy;
+    ly[array_index].month = lunar_month;
+    ly[array_index].leap = false;
+
+    int days = 29;
+    
+    // Check bit for month length (1=30 days, 0=29 days)
+    if ((month_lengths >> array_index) & 1) {
+      days = 30;
+    }
+    
+    // Check for leap month insertion
+    if (lunar_month == leap_month && !ly[array_index].leap) {
+      // Insert the leap month (intercalary month)
+      ly[array_index + 1].jd = jd + days;
+      ly[array_index + 1].year = yy;
+      ly[array_index + 1].month = lunar_month; // Leap month has the same number
+      ly[array_index + 1].leap = true;
+
+      // Update days for the new month based on the next length bit
+      if ((month_lengths >> (array_index + 1)) & 1) {
+        ly[array_index + 1].day = 30;
+      } else {
+        ly[array_index + 1].day = 29;
+      }
+      
+      // The original month (non-leap) is 29 or 30 days
+      ly[array_index].day = days;
+
+      jd += days;
+      array_index++;
+      lunar_month++;
+      
+    } else {
+      // Regular month
+      ly[array_index].day = days;
+      jd += days;
+      lunar_month++;
+    }
+    
+    array_index++;
+  }
+}
+
+/**
+ * Helper function to retrieve all months' data for a Gregorian year.
+ */
+void VietLunarCalendar::getYearInfo(int yyyy, LunarDate ly[]) {
+  uint32_t k = getYearCode(yyyy);
+  decodeLunarYear(yyyy, k, ly);
+}
+
+/**
+ * Searches the LunarDate array (ly) for the specific JDN and calculates the day number.
+ */
+LunarDate VietLunarCalendar::findLunarDate(long jd, const LunarDate ly[], int size) {
+  // Search the array to find which month the jd falls into
+  int monthIndex = 0;
+  for (int i = 0; i < size; i++) {
+    if (ly[i].jd <= jd) {
+      monthIndex = i;
+    } else {
+      break;
+    }
+  }
+
+  // Calculate the day number within that month
+  long dayNum = jd - ly[monthIndex].jd + 1;
+
+  LunarDate result = ly[monthIndex];
+  result.day = (int)dayNum;
+  result.jd = jd; // Set the exact JDN of the input date
+  
+  return result;
+}
+
 // --- Can Chi and Tiet Khi Accessors ---
 
 String VietLunarCalendar::getTietKhi(long jd) {
+  // Uses jd+1 to calculate the term based on the JDN of the *next* day, 
+  // consistent with the original JS logic for finding the Tiết point.
   int index = getSunLongitudeIndex(jd + 1, 7.0); 
   return String(TIETKHI[index]);
 }
 
 String VietLunarCalendar::getYearCanChi(int year) {
+  // Formula based on Giap Ty (4)
   String s = String(CAN[(year + 6) % 10]) + " " + String(CHI[(year + 8) % 12]);
   return s;
 }
 
 String VietLunarCalendar::getDayCanChi(const LunarDate& lunar) {
   if (lunar.jd == 0) return "Invalid Day";
+  // Day Can Chi derived from JDN (based on JDN 1 = Giap Tuat)
   String s = String(CAN[(lunar.jd + 9) % 10]) + " " + String(CHI[(lunar.jd + 1) % 12]);
   return s;
 }
 
 String VietLunarCalendar::getMonthCanChi(const LunarDate& lunar) {
+  // Month Can Chi derived from Year Can (yyyy*12+month+3) and Month Chi ((month+1)%12)
   String s = String(CAN[(lunar.year * 12 + lunar.month + 3) % 10]) + " " + String(CHI[(lunar.month + 1) % 12]);
   if (lunar.leap) {
     s += " (intercalary)";
@@ -134,29 +258,26 @@ String VietLunarCalendar::getMonthCanChi(const LunarDate& lunar) {
 
 /**
  * getLunarDate: Main function to retrieve the Lunar Date.
- * NOTE: The internal functions (getYearCode, decodeLunarYear, getYearInfo, findLunarDate) 
- * which utilize the TKxx data and bitwise operations must be fully implemented here 
- * to make the calendar fully functional across the 1900-2199 range.
  */
 LunarDate VietLunarCalendar::getLunarDate(int dd, int mm, int yyyy) {
   long jd = jdn(dd, mm, yyyy);
   
   if (yyyy < 1900 || yyyy > 2199) {
+    // Limited range supported by the TKxx data (1900-2199)
     return {0, 0, 0, false, jd}; 
   }
   
+  // Allocate space for Lunar Year Info (max 14 months)
   LunarDate ly1[14];
-  // Placeholder call - must be fully implemented
   getYearInfo(yyyy, ly1); 
   
-  // Check if the date belongs to the previous Lunar Year (before Tet)
+  // Check if the date falls before the current Lunar New Year (Tet) start date, use the previous year's data
   if (jd < ly1[0].jd) {
     LunarDate ly2[14];
-    // Placeholder call - must be fully implemented
-    getYearInfo(yyyy - 1, ly2); 
+    getYearInfo(yyyy - 1, ly2);
     return findLunarDate(jd, ly2, 14);
   }
   
-  // Placeholder call - must be fully implemented
+  // Find the lunar date within the current lunar year info
   return findLunarDate(jd, ly1, 14); 
 }
