@@ -40,14 +40,7 @@ This library uses the standard Arduino library folder structure.
 
 The final structure should look like this:
 
-.../libraries/VietLunarCalendar/
-├── README.md
-├── src/
-│   ├── VietLunarCalendar.h
-│   └── VietLunarCalendar.cpp
-└── examples/
-    └── BasicExample/
-        └── BasicExample.ino
+.../libraries/VietLunarCalendar/ ├── src/ │ ├── VietLunarCalendar.h │ └── VietLunarCalendar.cpp └── examples/ └── BasicExample/ └── BasicExample.ino
 
 ***
 
