@@ -1,5 +1,5 @@
 #include "VietLunarCalendar.h"
-#include <cmath> // Needed for floor, sin, fmod
+#include <math.h> // FIX: Changed from <cmath> to <math.h> for better compatibility with the Arduino compiler (avr-gcc).
 
 /**
  * VietLunarCalendar - Vietnamese Lunar Calendar Library for Arduino
